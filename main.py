@@ -1,133 +1,190 @@
 #!/usr/bin/env python3
 """
-RapidOCR CLI Tool (V6 Models Wrapper)
+RapidOCR Interactive CLI
 --------------------------
-A lightweight command-line tool to extract text from images,
-automatically copy it to your clipboard, and visualize the results.
+A drag-and-drop enabled, in-memory OCR loop with Quick Actions.
 
 Prerequisites:
     pip install rapidocr pyperclip
 """
 
-import argparse
+import os
 import sys
+import argparse
 from pathlib import Path
+from datetime import datetime
 
 try:
     from rapidocr import RapidOCR
 except ImportError as e:
-    RapidOCR = None  # Fixes IDE unbound warning
-    print(f"[-] Detailed Import Error: {e}")
-    print("[-] Error: 'rapidocr' wrapper is not installed.")
-    print("[!] Please install it using: pip install rapidocr")
+    RapidOCR = None
+    print(f"[-] Import Error: {e}")
+    print("[-] Please install the wrapper: pip install rapidocr")
     sys.exit(1)
 
 try:
     import pyperclip
 except ImportError:
-    pyperclip = None  # Fixes IDE unbound warning
-    print("[-] Error: pyperclip is not installed.")
-    print("[!] Please install it using: pip install pyperclip")
-    sys.exit(1)
+    pyperclip = None
+    print("[-] Warning: pyperclip is not installed. Clipboard copying is disabled.")
 
 
-def extract_text(image_path: str, disable_copy: bool, visualize: bool) -> None:
-    """
-    Runs the RapidOCR wrapper (which auto-downloads V6 models) on the image.
-    """
-    path = Path(image_path)
-    if not path.is_file():
-        print(f"Error: Could not find the image file at '{image_path}'")
-        sys.exit(1)
+def clear_screen():
+    """Clears the terminal screen for a clean UI."""
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-    print(f"[*] Initializing RapidOCR (V6 Wrapper)...")
-    # Initialize the engine. It will use the downloaded v6 models automatically.
-    engine = RapidOCR()
 
-    print(f"[*] Processing '{path.name}'...")
+def sanitize_path(raw_path: str) -> str:
+    """Cleans up terminal drag-and-drop paths."""
+    p = raw_path.strip()
 
-    # Run inference
-    raw_output = engine(str(path))
+    # PowerShell sometimes prefixes drag-and-drop with '& '
+    if p.startswith("& "):
+        p = p[2:]
 
-    # Handle different return signatures based on the wrapper version
-    if isinstance(raw_output, tuple) and len(raw_output) == 2:
-        result, _ = raw_output
-    else:
-        result = raw_output
+    # Remove surrounding quotes (common in Windows drag-and-drop)
+    if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
+        p = p[1:-1]
 
-    if not result:
-        print("\n[-] No text was detected in the image.")
-        return
+    return p.strip()
 
-    # Extract text robustly from RapidOCROutput dataclass or legacy lists
-    extracted_lines = []
 
-    # V6/3.x Wrapper returns a RapidOCROutput object with a 'txts' property
-    if hasattr(result, 'txts') and result.txts:
-        extracted_lines = list(result.txts)
+def generate_filenames(original_path: Path, out_dir: Path):
+    """Generates smart timestamped filenames."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = original_path.stem
 
-    # Some experimental branches used 'texts'
-    elif hasattr(result, 'texts') and result.texts:
-        extracted_lines = list(result.texts)
+    txt_name = f"{base_name}_OCR_{timestamp}.txt"
+    img_name = f"{base_name}_OCR_{timestamp}.jpg"
 
-    # Fallback if the underlying engine returns raw tuple/list data directly
-    elif isinstance(result, (list, tuple)):
-        for item in result:
-            # Find the string element in the tuple (usually the text)
-            text_part = next((x for x in item if isinstance(x, str)), None)
-            if text_part is not None:
-                extracted_lines.append(text_part)
-            elif len(item) > 1:
-                # Fallback if the tuple structure is slightly different
-                extracted_lines.append(str(item[1]))
-
-    full_text = "\n".join(extracted_lines)
-
-    # Handle Clipboard
-    if not disable_copy and pyperclip:
-        try:
-            pyperclip.copy(full_text)
-            print("[+] Text automatically copied to your clipboard!")
-        except Exception as e:
-            print(f"[-] Failed to copy to clipboard: {e}")
-
-    # Handle Visualization
-    if visualize:
-        out_name = f"vis_{path.name}"
-        if hasattr(result, 'vis'):
-            # The wrapper natively supports .vis() without needing OpenCV!
-            result.vis(out_name)
-            print(f"[+] Visualization image saved to: {out_name}")
-        else:
-            print("[-] Visualization (.vis) is not supported by your installed version of the wrapper.")
+    return out_dir / txt_name, out_dir / img_name
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract text from an image using the RapidOCR Wrapper."
-    )
-
-    parser.add_argument(
-        "image_path",
-        type=str,
-        help="Path to the screenshot or image file you want to read."
-    )
-
-    parser.add_argument(
-        "--no-copy",
-        action="store_true",
-        help="Print the text to the terminal but DO NOT copy it to the clipboard."
-    )
-
-    parser.add_argument(
-        "--vis",
-        action="store_true",
-        help="Generate an output image with boxes drawn around detected text."
-    )
-
+    parser = argparse.ArgumentParser(description="Interactive RapidOCR CLI.")
+    parser.add_argument("--quiet", action="store_true", help="Start with verbose logging disabled.")
     args = parser.parse_args()
 
-    extract_text(args.image_path, args.no_copy, args.vis)
+    is_quiet = args.quiet
+    out_dir = Path("out")
+    out_dir.mkdir(exist_ok=True)  # Ensure /out directory exists
+
+    clear_screen()
+    print("[*] WARM-UP PHASE: Loading RapidOCR engine into memory...")
+    print("[*] (This takes a few seconds, but subsequent runs will be instant)")
+
+    # Initialize engine ONCE outside the loop
+    engine = RapidOCR()
+
+    print("[+] Engine loaded successfully!\n")
+
+    # The next input to process. Pre-populated if passed via quick-action menu.
+    next_image_path = None
+
+    while True:
+        if not next_image_path:
+            raw_input = input("\n[>] Drag your image here and press Enter (or type 'q' to quit, 't' to toggle quiet): ")
+        else:
+            raw_input = next_image_path
+            next_image_path = None  # Reset for next iteration
+
+        # Handle UI toggles
+        if raw_input.lower() == 'q':
+            break
+        elif raw_input.lower() == 't':
+            is_quiet = not is_quiet
+            print(f"[*] Quiet mode is now {'ON' if is_quiet else 'OFF'}.")
+            continue
+        elif not raw_input.strip():
+            continue
+
+        # 1. Path Cleansing
+        clean_p = sanitize_path(raw_input)
+        img_path = Path(clean_p)
+
+        if not img_path.is_file():
+            print(f"[-] Error: Could not find file at '{clean_p}'")
+            continue
+
+        # 2. OCR Processing
+        if not is_quiet:
+            print(f"[*] Processing '{img_path.name}'...")
+
+        raw_output = engine(str(img_path))
+        result = raw_output[0] if (isinstance(raw_output, tuple) and len(raw_output) == 2) else raw_output
+
+        if not result:
+            print("[-] No text was detected in the image.")
+            continue
+
+        # Extract Text
+        extracted_lines = []
+        if hasattr(result, 'txts') and result.txts:
+            extracted_lines = list(result.txts)
+        elif hasattr(result, 'texts') and result.texts:
+            extracted_lines = list(result.texts)
+        elif isinstance(result, (list, tuple)):
+            for item in result:
+                text_part = next((x for x in item if isinstance(x, str)), None)
+                if text_part is not None:
+                    extracted_lines.append(text_part)
+                elif len(item) > 1:
+                    extracted_lines.append(str(item[1]))
+
+        full_text = "\n".join(extracted_lines)
+
+        # 3. Output Generation (Smart Filenames)
+        txt_out_path, img_out_path = generate_filenames(img_path, out_dir)
+
+        # Write TXT
+        with open(txt_out_path, 'w', encoding='utf-8') as f:
+            f.write(full_text)
+
+        # Write Vis Image
+        vis_supported = hasattr(result, 'vis')
+        if vis_supported:
+            result.vis(str(img_out_path))
+
+        if not is_quiet:
+            print("\n" + "=" * 40)
+            print(full_text)
+            print("=" * 40)
+            print(f"[+] Saved text to: {txt_out_path}")
+            if vis_supported:
+                print(f"[+] Saved image to: {img_out_path}")
+
+        # Clipboard default behavior
+        if pyperclip:
+            try:
+                pyperclip.copy(full_text)
+                print("[+] Text copied to clipboard!")
+            except Exception as e:
+                print(f"[-] Clipboard error: {e}")
+
+        # 4. Quick Action Menu Loop
+        while True:
+            action = input(
+                "\n[Action] Press 'I' (Img), 'N' (Notepad), 'C' (Clear), 'q' (Quit), or Drag NEW image here: ").strip()
+
+            if action.lower() == 'i':
+                if vis_supported:
+                    os.startfile(str(img_out_path))
+                else:
+                    print("[-] Visualization not supported by this engine version.")
+
+            elif action.lower() == 'n':
+                os.startfile(str(txt_out_path))
+
+            elif action.lower() == 'c':
+                clear_screen()
+
+            elif action.lower() == 'q':
+                sys.exit(0)
+
+            elif action:
+                # If they pasted a new path instead of a command, break out and process it!
+                next_image_path = action
+                break
 
 
 if __name__ == "__main__":
