@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-RapidOCR ONNX CLI Tool
+RapidOCR CLI Tool (V6 Models Wrapper)
 --------------------------
 A lightweight command-line tool to extract text from images,
 automatically copy it to your clipboard, and visualize the results.
 
 Prerequisites:
-    pip install rapidocr-onnxruntime pyperclip opencv-python numpy
+    pip install rapidocr pyperclip
 """
 
 import argparse
@@ -14,13 +14,12 @@ import sys
 from pathlib import Path
 
 try:
-    from rapidocr_onnxruntime import RapidOCR
+    from rapidocr import RapidOCR
 except ImportError as e:
     RapidOCR = None  # Fixes IDE unbound warning
     print(f"[-] Detailed Import Error: {e}")
-    print("[-] Error: rapidocr_onnxruntime is not installed or missing core dependencies.")
-    print(
-        "[!] Tip: If you already ran 'pip install', your IDE might be using a different Python interpreter/virtual environment than your terminal.")
+    print("[-] Error: 'rapidocr' wrapper is not installed.")
+    print("[!] Please install it using: pip install rapidocr")
     sys.exit(1)
 
 try:
@@ -31,87 +30,58 @@ except ImportError:
     print("[!] Please install it using: pip install pyperclip")
     sys.exit(1)
 
-try:
-    import cv2
-    import numpy as np
-
-    HAS_CV2 = True
-except ImportError:
-    cv2 = None
-    np = None
-    HAS_CV2 = False
-
-
-def visualize_result(image_path: str, result: list, output_path: str = "vis_result.jpg"):
-    """
-    Draws red bounding boxes around the detected text and saves the image.
-    This replicates the `.vis()` behavior from the generic RapidOCR demo.
-    """
-    if not HAS_CV2:
-        print("[-] Skipping visualization: 'opencv-python' is not installed.")
-        return
-
-    # Read the image
-    img = cv2.imread(image_path)
-    if img is None:
-        print(f"[-] Failed to load image for visualization: {image_path}")
-        return
-
-    # Draw a bounding box for each detected text region
-    for item in result:
-        # RapidOCR returns: [box, text, confidence]
-        box = item[0]
-
-        # Convert box coordinates to integer numpy array for OpenCV
-        pts = np.array(box, np.int32)
-        pts = pts.reshape((-1, 1, 2))
-
-        # Draw the polygon (red box, 2px thickness)
-        cv2.polylines(img, [pts], isClosed=True, color=(0, 0, 255), thickness=2)
-
-    # Save the annotated image
-    cv2.imwrite(output_path, img)
-    print(f"[+] Visualization image saved to: {output_path}")
-
 
 def extract_text(image_path: str, disable_copy: bool, visualize: bool) -> None:
     """
-    Runs the ONNX OCR engine on the specified image and handles the output.
+    Runs the RapidOCR wrapper (which auto-downloads V6 models) on the image.
     """
     path = Path(image_path)
     if not path.is_file():
         print(f"Error: Could not find the image file at '{image_path}'")
         sys.exit(1)
 
-    print(f"[*] Initializing RapidOCR (ONNX backend)...")
-    # Initialize the engine
+    print(f"[*] Initializing RapidOCR (V6 Wrapper)...")
+    # Initialize the engine. It will use the downloaded v6 models automatically.
     engine = RapidOCR()
 
     print(f"[*] Processing '{path.name}'...")
 
-    # Run inference.
-    # result: list of [box_coordinates, text, confidence_score]
-    # elapse: tuple of time taken for [det, cls, rec]
-    result, elapse_list = engine(str(path))
+    # Run inference
+    raw_output = engine(str(path))
 
-    if result is None:
+    # Handle different return signatures based on the wrapper version
+    if isinstance(raw_output, tuple) and len(raw_output) == 2:
+        result, _ = raw_output
+    else:
+        result = raw_output
+
+    if not result:
         print("\n[-] No text was detected in the image.")
         return
 
-    # Format output text
-    extracted_lines = [line[1] for line in result]
+    # Extract text robustly from RapidOCROutput dataclass or legacy lists
+    extracted_lines = []
+
+    # V6/3.x Wrapper returns a RapidOCROutput object with a 'txts' property
+    if hasattr(result, 'txts') and result.txts:
+        extracted_lines = list(result.txts)
+
+    # Some experimental branches used 'texts'
+    elif hasattr(result, 'texts') and result.texts:
+        extracted_lines = list(result.texts)
+
+    # Fallback if the underlying engine returns raw tuple/list data directly
+    elif isinstance(result, (list, tuple)):
+        for item in result:
+            # Find the string element in the tuple (usually the text)
+            text_part = next((x for x in item if isinstance(x, str)), None)
+            if text_part is not None:
+                extracted_lines.append(text_part)
+            elif len(item) > 1:
+                # Fallback if the tuple structure is slightly different
+                extracted_lines.append(str(item[1]))
+
     full_text = "\n".join(extracted_lines)
-
-    # Print results to terminal
-    print("\n" + "=" * 40)
-    print("📋 EXTRACTED TEXT:")
-    print("=" * 40)
-    print(full_text)
-    print("=" * 40)
-
-    # Calculate total time taken
-    total_time = sum(elapse_list) if isinstance(elapse_list, list) else elapse_list
-    print(f"[*] OCR completed in {total_time:.3f} seconds.")
 
     # Handle Clipboard
     if not disable_copy and pyperclip:
@@ -124,12 +94,17 @@ def extract_text(image_path: str, disable_copy: bool, visualize: bool) -> None:
     # Handle Visualization
     if visualize:
         out_name = f"vis_{path.name}"
-        visualize_result(str(path), result, out_name)
+        if hasattr(result, 'vis'):
+            # The wrapper natively supports .vis() without needing OpenCV!
+            result.vis(out_name)
+            print(f"[+] Visualization image saved to: {out_name}")
+        else:
+            print("[-] Visualization (.vis) is not supported by your installed version of the wrapper.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract text from an image using RapidOCR (ONNX)."
+        description="Extract text from an image using the RapidOCR Wrapper."
     )
 
     parser.add_argument(
@@ -147,7 +122,7 @@ def main():
     parser.add_argument(
         "--vis",
         action="store_true",
-        help="Generate an output image with red boxes drawn around detected text."
+        help="Generate an output image with boxes drawn around detected text."
     )
 
     args = parser.parse_args()
