@@ -4,8 +4,6 @@ RapidOCR Interactive CLI
 --------------------------
 A drag-and-drop enabled, in-memory OCR loop with Quick Actions.
 
-Prerequisites:
-    pip install rapidocr pyperclip
 """
 
 import os
@@ -30,7 +28,7 @@ except ImportError:
 
 
 def clear_screen():
-    """Clears the terminal screen for a clean UI."""
+    """Clears the terminal screen."""
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
@@ -38,11 +36,11 @@ def sanitize_path(raw_path: str) -> str:
     """Cleans up terminal drag-and-drop paths."""
     p = raw_path.strip()
 
-    # PowerShell sometimes prefixes drag-and-drop with '& '
+    # PowerShell '& ' prefix
     if p.startswith("& "):
         p = p[2:]
 
-    # Remove surrounding quotes (common in Windows drag-and-drop)
+    # Windows quoted directory path
     if (p.startswith('"') and p.endswith('"')) or (p.startswith("'") and p.endswith("'")):
         p = p[1:-1]
 
@@ -50,8 +48,8 @@ def sanitize_path(raw_path: str) -> str:
 
 
 def generate_filenames(original_path: Path, out_dir: Path):
-    """Generates smart timestamped filenames."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    """Generates timestamped filenames."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") #YearMonthDay_HourMinuteSecond
     base_name = original_path.stem
 
     txt_name = f"{base_name}_OCR_{timestamp}.txt"
@@ -61,24 +59,26 @@ def generate_filenames(original_path: Path, out_dir: Path):
 
 
 def main():
+    # Memanggil Parser RapidOCR
     parser = argparse.ArgumentParser(description="Interactive RapidOCR CLI.")
     parser.add_argument("--quiet", action="store_true", help="Start with verbose logging disabled.")
     args = parser.parse_args()
 
+    # Memastikan directory 'out'
     is_quiet = args.quiet
-    out_dir = Path("out")
+    out_dir = Path("out") # ubah untuk memindahkan output
     out_dir.mkdir(exist_ok=True)  # Ensure /out directory exists
 
     clear_screen()
-    print("[*] WARM-UP PHASE: Loading RapidOCR engine into memory...")
-    print("[*] (This takes a few seconds, but subsequent runs will be instant)")
+    print("[*] Setup: Loading RapidOCR engine into memory...")
 
     # Initialize engine ONCE outside the loop
     engine = RapidOCR()
 
     print("[+] Engine loaded successfully!\n")
+    print("[*] Setup selesai. Proses selanjutnya akan lebih cepat")
 
-    # The next input to process. Pre-populated if passed via quick-action menu.
+    # The next input to process
     next_image_path = None
 
     while True:
@@ -86,14 +86,14 @@ def main():
             raw_input = input("\n[>] Drag your image here and press Enter (or type 'q' to quit, 't' to toggle quiet): ")
         else:
             raw_input = next_image_path
-            next_image_path = None  # Reset for next iteration
+            next_image_path = None  # Reset
 
         # Handle UI toggles
         if raw_input.lower() == 'q':
             break
         elif raw_input.lower() == 't':
             is_quiet = not is_quiet
-            print(f"[*] Quiet mode is now {'ON' if is_quiet else 'OFF'}.")
+            print(f"[*] Quiet mode is {'ON' if is_quiet else 'OFF'}.")
             continue
         elif not raw_input.strip():
             continue
@@ -161,7 +161,7 @@ def main():
             except Exception as e:
                 print(f"[-] Clipboard error: {e}")
 
-        # 4. Quick Action Menu Loop
+        # 4. Shortcut mapping
         while True:
             action = input(
                 "\n[Action] Press 'I' (Img), 'N' (Notepad), 'C' (Clear), 'q' (Quit), or Drag NEW image here: ").strip()
